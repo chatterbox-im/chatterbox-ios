@@ -1,0 +1,12 @@
+# XCFramework — built by bootstrap.sh, never committed
+Chatterbox.xcframework/
+ChatterboxiOS/Chatterbox.xcframework/
+
+# Xcode per-user state
+ChatterboxiOS/ChatterboxiOS.xcodeproj/xcuserdata/
+ChatterboxiOS/ChatterboxiOS.xcodeproj/project.xcworkspace/xcuserdata/
+**/*.xcuserstate
+ChatterboxiOS/DerivedData/
+
+# macOS
+.DS_Store
