@@ -169,17 +169,24 @@ class AppState: ObservableObject {
             for jid in jids {
                 group.addTask { [weak self] in
                     guard let self else { return }
-                    // Use the timestamp of the newest locally stored message as the start point
+                    // Use the timestamp of the newest locally stored message as the start point.
+                    // Add 1 second so the MAM query is exclusive — avoids re-fetching the last
+                    // message whose OMEMO ratchet state has already been advanced.
                     let since: Int64
+                    let knownIds: Set<String>
                     if let last = await self.conversations[jid]?.last {
-                        since = last.timestamp
+                        since = last.timestamp + 1
+                        knownIds = Set(await self.conversations[jid]!.map { $0.id })
                     } else {
-                        // No local history — fetch last 7 days
                         since = Int64(Date().timeIntervalSince1970) - 7 * 86400
+                        knownIds = []
                     }
                     guard let newMsgs = try? await self.client.fetchMam(jid: jid, sinceUnixSecs: since) else { return }
                     await MainActor.run {
-                        for msg in newMsgs { self.append(msg, partner: jid) }
+                        // Filter out IDs already in memory (belt-and-suspenders dedup)
+                        for msg in newMsgs where !knownIds.contains(msg.id) {
+                            self.append(msg, partner: jid)
+                        }
                     }
                 }
             }
