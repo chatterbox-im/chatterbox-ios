@@ -1,8 +1,14 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct ChatterboxiOSApp: App {
     @StateObject private var state = AppState()
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        registerBackgroundTasks()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -15,6 +21,16 @@ struct ChatterboxiOSApp: App {
             }
             .environmentObject(state)
             .animation(.easeInOut, value: state.isConnected)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                scheduleBackgroundRefresh()
+            case .active:
+                UNUserNotificationCenter.current().setBadgeCount(0)
+            default:
+                break
+            }
         }
     }
 }

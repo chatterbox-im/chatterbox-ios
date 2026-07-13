@@ -2,11 +2,26 @@
 Chatterbox.xcframework/
 ChatterboxiOS/Chatterbox.xcframework/
 
+# Generated Swift bindings — updated by bootstrap.sh
+# ChatterboxFFI/ is committed as a snapshot; the xcframework is not.
+# Uncomment the next line if you want to regenerate bindings on every bootstrap:
+# ChatterboxFFI/
+
 # Xcode per-user state
 ChatterboxiOS/ChatterboxiOS.xcodeproj/xcuserdata/
 ChatterboxiOS/ChatterboxiOS.xcodeproj/project.xcworkspace/xcuserdata/
 **/*.xcuserstate
+
+# Xcode build artefacts
 ChatterboxiOS/DerivedData/
+build/
+*.o
+*.a
+
+# Swift Package Manager (if added later)
+.build/
+.swiftpm/
 
 # macOS
 .DS_Store
+**/.DS_Store

@@ -1,13 +1,44 @@
 import SwiftUI
 
+// MARK: - Chat item model (message or date separator)
+
+private enum ChatItem: Identifiable {
+    case message(FfiMessage)
+    case dateSeparator(Date)
+
+    var id: String {
+        switch self {
+        case .message(let m):      return m.id
+        case .dateSeparator(let d): return "sep-\(Int(d.timeIntervalSince1970))"
+        }
+    }
+}
+
+// MARK: - ChatView
+
 struct ChatView: View {
     let jid: String
     @EnvironmentObject private var state: AppState
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
 
-    private var messages: [FfiMessage] {
-        state.conversations[jid] ?? []
+    private var messages: [FfiMessage] { state.conversations[jid] ?? [] }
+
+    private var chatItems: [ChatItem] {
+        var items: [ChatItem] = []
+        var lastDay: Date?
+        let cal = Calendar.current
+        for msg in messages {
+            let date = Date(timeIntervalSince1970: Double(msg.timestamp))
+            if let prev = lastDay, !cal.isDate(date, inSameDayAs: prev) {
+                items.append(.dateSeparator(date))
+            } else if lastDay == nil {
+                items.append(.dateSeparator(date))
+            }
+            lastDay = date
+            items.append(.message(msg))
+        }
+        return items
     }
 
     private var contactName: String {
@@ -23,6 +54,25 @@ struct ChatView: View {
         }
         .navigationTitle(contactName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink(value: "info:\(jid)") {
+                    Image(systemName: "info.circle")
+                }
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if state.typing.contains(jid) {
+                HStack(spacing: 4) {
+                    ProgressView().scaleEffect(0.7)
+                    Text("\(contactName) is typing…")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 4)
+                .background(.bar)
+            }
+        }
         .onAppear { state.markRead(jid) }
     }
 
@@ -31,23 +81,47 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(messages, id: \.id) { msg in
-                        MessageBubble(
-                            msg: msg,
-                            isOwn: msg.fromJid.hasPrefix(state.ownJid.components(separatedBy: "/").first ?? state.ownJid)
-                        )
-                        .id(msg.id)
+                if messages.isEmpty {
+                    ContentUnavailableView(
+                        "No Messages",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Send a message to start the conversation.")
+                    )
+                    .padding(.top, 60)
+                } else {
+                    LazyVStack(spacing: 2) {
+                        ForEach(chatItems) { item in
+                            switch item {
+                            case .dateSeparator(let date):
+                                Text(date, format: .dateTime.day().month().year())
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .padding(.vertical, 8)
+                            case .message(let msg):
+                                let ownBare  = state.ownJid.components(separatedBy: "/").first ?? state.ownJid
+                                let fromBare = msg.fromJid.components(separatedBy: "/").first  ?? msg.fromJid
+                                MessageBubble(msg: msg, isOwn: fromBare == ownBare || fromBare == "me")
+                                    .id(msg.id)
+                                    .contextMenu {
+                                        Button {
+                                            UIPasteboard.general.string = msg.body
+                                        } label: {
+                                            Label("Copy", systemImage: "doc.on.doc")
+                                        }
+                                        Divider()
+                                        Button(role: .destructive) {
+                                            state.deleteMessage(id: msg.id, partner: jid)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
                     }
+                    .padding(.vertical, 10)
                 }
-                .padding(.vertical, 10)
             }
-            .onAppear {
-                scrollToBottom(proxy: proxy, animated: false)
-            }
-            .onChange(of: messages.count) {
-                scrollToBottom(proxy: proxy, animated: true)
-            }
+            .onAppear { scrollToBottom(proxy: proxy, animated: false) }
+            .onChange(of: messages.count) { scrollToBottom(proxy: proxy, animated: true) }
         }
     }
 
@@ -74,6 +148,9 @@ struct ChatView: View {
                     Color(.secondarySystemBackground),
                     in: RoundedRectangle(cornerRadius: 20)
                 )
+                .onChange(of: draft) { _, new in
+                    state.sendTyping(to: jid, isTyping: !new.isEmpty)
+                }
 
             Button { send() } label: {
                 Image(systemName: "arrow.up.circle.fill")
@@ -106,7 +183,7 @@ private struct MessageBubble: View {
         HStack(alignment: .bottom) {
             if isOwn { Spacer(minLength: 64) }
             VStack(alignment: isOwn ? .trailing : .leading, spacing: 3) {
-                Text(msg.body)
+                Text(linkedBody)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
@@ -115,6 +192,7 @@ private struct MessageBubble: View {
                     )
                     .foregroundStyle(isOwn ? .white : .primary)
                     .textSelection(.enabled)
+                    .tint(isOwn ? .white : .accentColor)
 
                 HStack(spacing: 3) {
                     if msg.isEncrypted {
@@ -137,6 +215,28 @@ private struct MessageBubble: View {
             if !isOwn { Spacer(minLength: 64) }
         }
         .padding(.horizontal, 8)
+    }
+
+    /// Build an AttributedString with any http/https URLs turned into tappable links.
+    private var linkedBody: AttributedString {
+        var attributed = AttributedString(msg.body)
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else { return attributed }
+
+        let plain = msg.body
+        let matches = detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain))
+        for match in matches {
+            guard let nsRange = Range(match.range, in: plain),
+                  let url = match.url,
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https",
+                  let attrRange = Range<AttributedString.Index>(nsRange, in: attributed)
+            else { continue }
+            attributed[attrRange].link = url
+            attributed[attrRange].underlineStyle = .single
+        }
+        return attributed
     }
 
     private var statusIcon: String {

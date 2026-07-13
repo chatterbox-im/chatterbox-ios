@@ -400,6 +400,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
     typealias FfiType = Int64
     typealias SwiftType = Int64
@@ -494,14 +510,51 @@ public protocol ChatterboxClientProtocol: AnyObject, Sendable {
     func connect(server: String, username: String, password: String) async throws 
     
     /**
+     * Delete all stored messages for a conversation partner.
+     */
+    func deleteConversation(jid: String) async throws 
+    
+    /**
      * Gracefully disconnect and close the event stream.
      */
     func disconnect() async 
     
     /**
+     * Mark an OMEMO device as untrusted.
+     */
+    func distrustDevice(jid: String, deviceId: UInt32) async throws 
+    
+    /**
+     * Fetch server-side message archive (MAM, XEP-0313) for `jid` and store
+     * any messages newer than `since_unix_secs`.  Returns the new messages
+     * oldest-first so the caller can append them to local history.
+     */
+    func fetchMam(jid: String, sinceUnixSecs: Int64) async throws  -> [FfiMessage]
+    
+    /**
      * Fetch the roster (contact list) from the server.
      */
     func getContacts() async throws  -> [FfiContact]
+    
+    /**
+     * Fetch OMEMO fingerprints for every known device of `jid`.
+     *
+     * Returns an empty list if OMEMO is not yet initialised or the contact
+     * has no known devices.
+     */
+    func getFingerprints(jid: String) async throws  -> [FfiFingerprint]
+    
+    /**
+     * Return all contact JIDs that have stored message history, newest-first.
+     * Call this after `connect()` to restore previous conversations.
+     */
+    func listConversations() async throws  -> [String]
+    
+    /**
+     * Load the most recent `limit` messages for a conversation partner.
+     * Returns oldest-first so the UI can append them in order.
+     */
+    func loadHistory(jid: String, limit: UInt32) async throws  -> [FfiMessage]
     
     /**
      * Wait for the next event (message, presence update, or disconnect).
@@ -521,8 +574,19 @@ public protocol ChatterboxClientProtocol: AnyObject, Sendable {
     
     /**
      * Send an OMEMO-encrypted (or plaintext-fallback) message to `to_jid`.
+     * Returns the stored `FfiMessage` so the caller can display it immediately.
      */
-    func sendMessage(toJid: String, body: String) async throws 
+    func sendMessage(toJid: String, body: String) async throws  -> FfiMessage
+    
+    /**
+     * Send an XEP-0085 chat state: `is_typing = true` → Composing, false → Paused.
+     */
+    func sendTyping(jid: String, isTyping: Bool) async throws 
+    
+    /**
+     * Mark an OMEMO device as trusted.
+     */
+    func trustDevice(jid: String, deviceId: UInt32) async throws 
     
 }
 /**
@@ -613,6 +677,26 @@ open func connect(server: String, username: String, password: String)async throw
 }
     
     /**
+     * Delete all stored messages for a conversation partner.
+     */
+open func deleteConversation(jid: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_delete_conversation(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_void,
+            completeFunc: ffi_chatterbox_rust_future_complete_void,
+            freeFunc: ffi_chatterbox_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
      * Gracefully disconnect and close the event stream.
      */
 open func disconnect()async   {
@@ -634,6 +718,48 @@ open func disconnect()async   {
 }
     
     /**
+     * Mark an OMEMO device as untrusted.
+     */
+open func distrustDevice(jid: String, deviceId: UInt32)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_distrust_device(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid),FfiConverterUInt32.lower(deviceId)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_void,
+            completeFunc: ffi_chatterbox_rust_future_complete_void,
+            freeFunc: ffi_chatterbox_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
+     * Fetch server-side message archive (MAM, XEP-0313) for `jid` and store
+     * any messages newer than `since_unix_secs`.  Returns the new messages
+     * oldest-first so the caller can append them to local history.
+     */
+open func fetchMam(jid: String, sinceUnixSecs: Int64)async throws  -> [FfiMessage]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_fetch_mam(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid),FfiConverterInt64.lower(sinceUnixSecs)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_rust_buffer,
+            completeFunc: ffi_chatterbox_rust_future_complete_rust_buffer,
+            freeFunc: ffi_chatterbox_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiMessage.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
      * Fetch the roster (contact list) from the server.
      */
 open func getContacts()async throws  -> [FfiContact]  {
@@ -649,6 +775,71 @@ open func getContacts()async throws  -> [FfiContact]  {
             completeFunc: ffi_chatterbox_rust_future_complete_rust_buffer,
             freeFunc: ffi_chatterbox_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceTypeFfiContact.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
+     * Fetch OMEMO fingerprints for every known device of `jid`.
+     *
+     * Returns an empty list if OMEMO is not yet initialised or the contact
+     * has no known devices.
+     */
+open func getFingerprints(jid: String)async throws  -> [FfiFingerprint]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_get_fingerprints(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_rust_buffer,
+            completeFunc: ffi_chatterbox_rust_future_complete_rust_buffer,
+            freeFunc: ffi_chatterbox_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiFingerprint.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
+     * Return all contact JIDs that have stored message history, newest-first.
+     * Call this after `connect()` to restore previous conversations.
+     */
+open func listConversations()async throws  -> [String]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_list_conversations(
+                    self.uniffiClonePointer()
+                    
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_rust_buffer,
+            completeFunc: ffi_chatterbox_rust_future_complete_rust_buffer,
+            freeFunc: ffi_chatterbox_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceString.lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
+     * Load the most recent `limit` messages for a conversation partner.
+     * Returns oldest-first so the UI can append them in order.
+     */
+open func loadHistory(jid: String, limit: UInt32)async throws  -> [FfiMessage]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_load_history(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_rust_buffer,
+            completeFunc: ffi_chatterbox_rust_future_complete_rust_buffer,
+            freeFunc: ffi_chatterbox_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeFfiMessage.lift,
             errorHandler: FfiConverterTypeFfiError_lift
         )
 }
@@ -687,14 +878,55 @@ open func nextEvent()async  -> FfiEvent?  {
     
     /**
      * Send an OMEMO-encrypted (or plaintext-fallback) message to `to_jid`.
+     * Returns the stored `FfiMessage` so the caller can display it immediately.
      */
-open func sendMessage(toJid: String, body: String)async throws   {
+open func sendMessage(toJid: String, body: String)async throws  -> FfiMessage  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_chatterbox_fn_method_chatterboxclient_send_message(
                     self.uniffiClonePointer(),
                     FfiConverterString.lower(toJid),FfiConverterString.lower(body)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_rust_buffer,
+            completeFunc: ffi_chatterbox_rust_future_complete_rust_buffer,
+            freeFunc: ffi_chatterbox_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeFfiMessage_lift,
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
+     * Send an XEP-0085 chat state: `is_typing = true` → Composing, false → Paused.
+     */
+open func sendTyping(jid: String, isTyping: Bool)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_send_typing(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid),FfiConverterBool.lower(isTyping)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_void,
+            completeFunc: ffi_chatterbox_rust_future_complete_void,
+            freeFunc: ffi_chatterbox_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
+        )
+}
+    
+    /**
+     * Mark an OMEMO device as trusted.
+     */
+open func trustDevice(jid: String, deviceId: UInt32)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_trust_device(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid),FfiConverterUInt32.lower(deviceId)
                 )
             },
             pollFunc: ffi_chatterbox_rust_future_poll_void,
@@ -845,6 +1077,93 @@ public func FfiConverterTypeFfiContact_lift(_ buf: RustBuffer) throws -> FfiCont
 #endif
 public func FfiConverterTypeFfiContact_lower(_ value: FfiContact) -> RustBuffer {
     return FfiConverterTypeFfiContact.lower(value)
+}
+
+
+/**
+ * An OMEMO device fingerprint as seen by the iOS UI.
+ */
+public struct FfiFingerprint {
+    public var deviceId: UInt32
+    /**
+     * 64-char hex string, space-grouped for display: "AABB CCDD …"
+     */
+    public var fingerprint: String
+    public var isTrusted: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(deviceId: UInt32, 
+        /**
+         * 64-char hex string, space-grouped for display: "AABB CCDD …"
+         */fingerprint: String, isTrusted: Bool) {
+        self.deviceId = deviceId
+        self.fingerprint = fingerprint
+        self.isTrusted = isTrusted
+    }
+}
+
+#if compiler(>=6)
+extension FfiFingerprint: Sendable {}
+#endif
+
+
+extension FfiFingerprint: Equatable, Hashable {
+    public static func ==(lhs: FfiFingerprint, rhs: FfiFingerprint) -> Bool {
+        if lhs.deviceId != rhs.deviceId {
+            return false
+        }
+        if lhs.fingerprint != rhs.fingerprint {
+            return false
+        }
+        if lhs.isTrusted != rhs.isTrusted {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(deviceId)
+        hasher.combine(fingerprint)
+        hasher.combine(isTrusted)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiFingerprint: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiFingerprint {
+        return
+            try FfiFingerprint(
+                deviceId: FfiConverterUInt32.read(from: &buf), 
+                fingerprint: FfiConverterString.read(from: &buf), 
+                isTrusted: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiFingerprint, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.deviceId, into: &buf)
+        FfiConverterString.write(value.fingerprint, into: &buf)
+        FfiConverterBool.write(value.isTrusted, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFingerprint_lift(_ buf: RustBuffer) throws -> FfiFingerprint {
+    return try FfiConverterTypeFfiFingerprint.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiFingerprint_lower(_ value: FfiFingerprint) -> RustBuffer {
+    return FfiConverterTypeFfiFingerprint.lower(value)
 }
 
 
@@ -1107,6 +1426,17 @@ public enum FfiEvent {
      */
     case disconnected(reason: String
     )
+    /**
+     * The delivery status of a previously sent message changed.
+     */
+    case statusUpdate(msgId: String, status: String
+    )
+    /**
+     * A contact started or stopped composing a message.
+     * `is_typing` = true → composing; false → paused/inactive/gone.
+     */
+    case typingUpdate(jid: String, isTyping: Bool
+    )
 }
 
 
@@ -1133,6 +1463,12 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
         case 3: return .disconnected(reason: try FfiConverterString.read(from: &buf)
         )
         
+        case 4: return .statusUpdate(msgId: try FfiConverterString.read(from: &buf), status: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .typingUpdate(jid: try FfiConverterString.read(from: &buf), isTyping: try FfiConverterBool.read(from: &buf)
+        )
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -1154,6 +1490,18 @@ public struct FfiConverterTypeFfiEvent: FfiConverterRustBuffer {
         case let .disconnected(reason):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .statusUpdate(msgId,status):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(msgId, into: &buf)
+            FfiConverterString.write(status, into: &buf)
+            
+        
+        case let .typingUpdate(jid,isTyping):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(jid, into: &buf)
+            FfiConverterBool.write(isTyping, into: &buf)
             
         }
     }
@@ -1209,6 +1557,31 @@ fileprivate struct FfiConverterOptionTypeFfiEvent: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiContact: FfiConverterRustBuffer {
     typealias SwiftType = [FfiContact]
 
@@ -1226,6 +1599,56 @@ fileprivate struct FfiConverterSequenceTypeFfiContact: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeFfiContact.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiFingerprint: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiFingerprint]
+
+    public static func write(_ value: [FfiFingerprint], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiFingerprint.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiFingerprint] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiFingerprint]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiFingerprint.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiMessage: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMessage]
+
+    public static func write(_ value: [FfiMessage], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMessage.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMessage] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMessage]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMessage.read(from: &buf))
         }
         return seq
     }
@@ -1295,16 +1718,40 @@ private let initializationResult: InitializationResult = {
     if (uniffi_chatterbox_checksum_method_chatterboxclient_connect() != 40716) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_delete_conversation() != 23155) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_disconnect() != 14714) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_distrust_device() != 32923) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_fetch_mam() != 13931) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_get_contacts() != 31375) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_get_fingerprints() != 51149) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_list_conversations() != 63186) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_load_history() != 6830) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_next_event() != 18508) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_chatterbox_checksum_method_chatterboxclient_send_message() != 43495) {
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_send_message() != 12952) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_send_typing() != 32670) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_trust_device() != 48370) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chatterbox_checksum_constructor_chatterboxclient_new() != 51383) {

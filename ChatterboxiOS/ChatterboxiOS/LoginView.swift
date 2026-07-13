@@ -12,6 +12,15 @@ struct LoginView: View {
 
     var body: some View {
         NavigationStack {
+            // If we're auto-connecting (credentials were already stored), show a
+            // full-screen spinner instead of briefly flashing the form.
+            if state.isConnecting && CredentialStore.shared.isComplete {
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("Connecting…").foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
             Form {
                 Section("Server") {
                     TextField("xmpp.server.org", text: $server)
@@ -56,8 +65,23 @@ struct LoginView: View {
                     }
                 }
             }
+            } // end else (auto-connecting spinner branch)
         }
-        .onAppear { focus = .server }
+        .onAppear {
+            // Pre-populate from stored credentials
+            let store = CredentialStore.shared
+            server   = store.server
+            username = store.username
+            if let saved = store.loadPassword() {
+                password = saved
+            }
+            // Auto-connect if all credentials are already stored
+            if store.isComplete {
+                Task { await connect() }
+            } else {
+                focus = server.isEmpty ? .server : (username.isEmpty ? .username : .password)
+            }
+        }
     }
 
     private var isValid: Bool {

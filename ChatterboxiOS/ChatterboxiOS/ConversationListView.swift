@@ -4,13 +4,26 @@ struct ConversationListView: View {
     @EnvironmentObject private var state: AppState
     @State private var newJid = ""
     @State private var showNewChat = false
+    @State private var showSignOut = false
     @State private var path = NavigationPath()
+
+    /// Contacts not yet in any conversation, for the new-chat picker
+    private var rosterContacts: [FfiContact] {
+        state.contacts.values
+            .filter { !state.conversations.keys.contains($0.jid) }
+            .sorted { $0.displayName < $1.displayName }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             list
-                .navigationDestination(for: String.self) { jid in
-                    ChatView(jid: jid)
+                .navigationDestination(for: String.self) { value in
+                    if value.hasPrefix("info:") {
+                        let jid = String(value.dropFirst(5))
+                        ContactInfoView(jid: jid)
+                    } else {
+                        ChatView(jid: value)
+                    }
                 }
         }
     }
@@ -26,11 +39,24 @@ struct ConversationListView: View {
                         unread: state.unread[item.jid] ?? 0
                     )
                 }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        state.deleteConversation(jid: item.jid)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         }
         .listStyle(.plain)
         .navigationTitle("Chatterbox")
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showSignOut = true } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { showNewChat = true } label: {
                     Image(systemName: "square.and.pencil")
@@ -38,13 +64,25 @@ struct ConversationListView: View {
             }
             ToolbarItem(placement: .bottomBar) {
                 HStack(spacing: 5) {
-                    Circle()
-                        .fill(state.isConnected ? Color.green : Color.gray)
-                        .frame(width: 8, height: 8)
-                    Text(state.isConnected ? "Connected" : "Disconnected")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if state.isReconnecting {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Reconnecting…").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Circle()
+                            .fill(state.isConnected ? Color.green : Color.gray)
+                            .frame(width: 8, height: 8)
+                        Text(state.isConnected ? "Connected" : "Disconnected")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .confirmationDialog("Sign out of \(CredentialStore.shared.username)?",
+                            isPresented: $showSignOut,
+                            titleVisibility: .visible) {
+            Button("Sign Out", role: .destructive) {
+                Task { await state.signOut() }
             }
         }
         .alert("New Conversation", isPresented: $showNewChat) {
@@ -56,14 +94,24 @@ struct ConversationListView: View {
                 let jid = newJid.trimmingCharacters(in: .whitespaces)
                 newJid = ""
                 guard !jid.isEmpty else { return }
-                if state.conversations[jid] == nil {
-                    state.conversations[jid] = []
-                }
-                path.append(jid)
+                openConversation(jid: jid)
             }
             Button("Cancel", role: .cancel) { newJid = "" }
         } message: {
-            Text("Enter the JID of the person you want to chat with.")
+            // Show roster contacts as a hint when available
+            if rosterContacts.isEmpty {
+                Text("Enter the JID of the person you want to chat with.")
+            } else {
+                Text("Enter a JID or choose from your contacts below.")
+            }
+        }
+        .sheet(isPresented: .constant(!rosterContacts.isEmpty && showNewChat),
+               onDismiss: { showNewChat = false }) {
+            RosterPickerSheet(rosterContacts: rosterContacts) { jid in
+                showNewChat = false
+                openConversation(jid: jid)
+            }
+            .presentationDetents([.medium, .large])
         }
         .overlay {
             if state.sortedConversations.isEmpty {
@@ -75,9 +123,50 @@ struct ConversationListView: View {
             }
         }
     }
+
+    private func openConversation(jid: String) {
+        if state.conversations[jid] == nil { state.conversations[jid] = [] }
+        path.append(jid)
+    }
 }
 
-// MARK: - Row
+// MARK: - Roster picker sheet
+
+private struct RosterPickerSheet: View {
+    let rosterContacts: [FfiContact]
+    let onSelect: (String) -> Void
+
+    @State private var search = ""
+
+    private var filtered: [FfiContact] {
+        search.isEmpty ? rosterContacts :
+            rosterContacts.filter {
+                $0.displayName.localizedCaseInsensitiveContains(search) ||
+                $0.jid.localizedCaseInsensitiveContains(search)
+            }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(filtered, id: \.jid) { contact in
+                Button {
+                    onSelect(contact.jid)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(contact.displayName.isEmpty ? contact.jid : contact.displayName)
+                            .foregroundStyle(.primary)
+                        if !contact.displayName.isEmpty {
+                            Text(contact.jid).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $search, prompt: "Search contacts")
+            .navigationTitle("New Conversation")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
 
 private struct ConversationRow: View {
     let jid: String
