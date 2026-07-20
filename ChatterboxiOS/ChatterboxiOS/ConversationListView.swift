@@ -85,7 +85,10 @@ struct ConversationListView: View {
                 Task { await state.signOut() }
             }
         }
-        .alert("New Conversation", isPresented: $showNewChat) {
+        .alert("New Conversation", isPresented: Binding(
+            get: { showNewChat && rosterContacts.isEmpty },
+            set: { if !$0 { showNewChat = false } }
+        )) {
             TextField("user@example.com", text: $newJid)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -98,15 +101,12 @@ struct ConversationListView: View {
             }
             Button("Cancel", role: .cancel) { newJid = "" }
         } message: {
-            // Show roster contacts as a hint when available
-            if rosterContacts.isEmpty {
-                Text("Enter the JID of the person you want to chat with.")
-            } else {
-                Text("Enter a JID or choose from your contacts below.")
-            }
+            Text("Enter the JID of the person you want to chat with.")
         }
-        .sheet(isPresented: .constant(!rosterContacts.isEmpty && showNewChat),
-               onDismiss: { showNewChat = false }) {
+        .sheet(isPresented: Binding(
+            get: { showNewChat && !rosterContacts.isEmpty },
+            set: { if !$0 { showNewChat = false } }
+        )) {
             RosterPickerSheet(rosterContacts: rosterContacts) { jid in
                 showNewChat = false
                 openConversation(jid: jid)
