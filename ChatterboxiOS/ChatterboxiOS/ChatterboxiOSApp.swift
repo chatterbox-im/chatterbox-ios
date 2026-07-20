@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UserNotifications
 
 @main
@@ -26,7 +27,15 @@ struct ChatterboxiOSApp: App {
             switch phase {
             case .background:
                 scheduleBackgroundRefresh()
-                Task { await state.suspend() }
+                let app = UIApplication.shared
+                var bgTask = UIBackgroundTaskIdentifier.invalid
+                bgTask = app.beginBackgroundTask(withName: "xmpp-disconnect") {
+                    app.endBackgroundTask(bgTask)
+                }
+                Task {
+                    await state.suspend()
+                    app.endBackgroundTask(bgTask)
+                }
             case .active:
                 UNUserNotificationCenter.current().setBadgeCount(0)
                 state.resumeIfNeeded()
