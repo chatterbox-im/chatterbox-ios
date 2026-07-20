@@ -26,8 +26,10 @@ struct ChatterboxiOSApp: App {
             switch phase {
             case .background:
                 scheduleBackgroundRefresh()
+                Task { await state.suspend() }
             case .active:
                 UNUserNotificationCenter.current().setBadgeCount(0)
+                state.resumeIfNeeded()
             default:
                 break
             }

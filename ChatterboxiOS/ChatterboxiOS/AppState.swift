@@ -116,6 +116,32 @@ class AppState: ObservableObject {
         conversations[partner]?.removeAll { $0.id == id }
     }
 
+    // MARK: - Background suspend / foreground resume
+
+    /// Cleanly disconnect when the app backgrounds. Credentials are preserved so
+    /// the server gets a proper unavailable presence and can queue messages in MAM.
+    func suspend() async {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
+        isReconnecting = false
+        await client.disconnect()
+        isConnected = false
+    }
+
+    /// Reconnect immediately using saved credentials when returning to foreground.
+    func resumeIfNeeded() {
+        guard !isConnected, !isConnecting, !savedServer.isEmpty,
+              let pw = CredentialStore.shared.loadPassword(), !pw.isEmpty else { return }
+        reconnectTask?.cancel()
+        reconnectAttempt = 0
+        Task {
+            await connect(server: savedServer,
+                          username: CredentialStore.shared.username,
+                          password: pw)
+        }
+    }
+
     // MARK: - Sign out
 
     func signOut() async {
