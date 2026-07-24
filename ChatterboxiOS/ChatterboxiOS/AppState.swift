@@ -37,6 +37,15 @@ class AppState: ObservableObject {
         isConnecting = true
         connectionError = nil
         do {
+            // Open the persistent log file in Documents (visible in Files app)
+            // before connecting so every log line—including any decryption errors—
+            // is written to disk and survives an app kill or crash.
+            if let docs = FileManager.default
+                .urls(for: .documentDirectory, in: .userDomainMask).first {
+                let logPath = docs.appendingPathComponent("chatterbox.log").path
+                setLogFile(path: logPath)
+            }
+
             try await client.connect(server: server, username: username, password: password)
 
             // Bare JID — strip resource if present

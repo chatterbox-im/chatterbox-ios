@@ -1699,6 +1699,31 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
         print("uniffiFutureContinuationCallback invalid handle")
     }
 }
+/**
+ * Return all buffered log lines as a single newline-separated string.
+ * Call from Swift to get the full in-session log for export.
+ */
+public func getLogContents() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_chatterbox_fn_func_get_log_contents($0
+    )
+})
+}
+/**
+ * Open (and truncate) the persistent log file at `path`.  Call this once at
+ * app startup, before `connect()`.  All subsequent log lines will be written
+ * to that file AND to the in-memory buffer.  Any lines already in the buffer
+ * are flushed to the file first so no early logs are lost.
+ *
+ * The file is kept open for the lifetime of the process so every log line
+ * reaches disk even if the app is killed, unlike an in-memory buffer.
+ */
+public func setLogFile(path: String)  {try! rustCall() {
+    uniffi_chatterbox_fn_func_set_log_file(
+        FfiConverterString.lower(path),$0
+    )
+}
+}
 
 private enum InitializationResult {
     case ok
@@ -1714,6 +1739,12 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_chatterbox_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_chatterbox_checksum_func_get_log_contents() != 53127) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_func_set_log_file() != 64639) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_connect() != 40716) {
         return InitializationResult.apiChecksumMismatch

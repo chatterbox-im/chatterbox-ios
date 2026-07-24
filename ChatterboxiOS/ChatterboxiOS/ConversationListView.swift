@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ConversationListView: View {
     @EnvironmentObject private var state: AppState
@@ -6,6 +7,7 @@ struct ConversationListView: View {
     @State private var showNewChat = false
     @State private var showSignOut = false
     @State private var path = NavigationPath()
+    @State private var logShareURL: URL?
 
     /// Contacts not yet in any conversation, for the new-chat picker
     private var rosterContacts: [FfiContact] {
@@ -52,8 +54,15 @@ struct ConversationListView: View {
         .navigationTitle("Chatterbox")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { showSignOut = true } label: {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                Menu {
+                    Button { showSignOut = true } label: {
+                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                    Button { exportLogs() } label: {
+                        Label("Export Debug Logs", systemImage: "doc.text.below.ecg")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -76,6 +85,15 @@ struct ConversationListView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { logShareURL != nil },
+            set: { if !$0 { logShareURL = nil } }
+        )) {
+            if let url = logShareURL {
+                ShareSheet(items: [url])
+                    .presentationDetents([.medium, .large])
             }
         }
         .confirmationDialog("Sign out of \(CredentialStore.shared.username)?",
@@ -127,6 +145,23 @@ struct ConversationListView: View {
     private func openConversation(jid: String) {
         if state.conversations[jid] == nil { state.conversations[jid] = [] }
         path.append(jid)
+    }
+
+    private func exportLogs() {
+        guard let docs = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let logURL = docs.appendingPathComponent("chatterbox.log")
+        // If no file session yet, fall back to the in-memory buffer.
+        if FileManager.default.fileExists(atPath: logURL.path) {
+            logShareURL = logURL
+        } else {
+            let content = getLogContents()
+            guard !content.isEmpty else { return }
+            let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("chatterbox-logs.txt")
+            try? content.write(to: tmp, atomically: true, encoding: .utf8)
+            logShareURL = tmp
+        }
     }
 }
 
@@ -238,4 +273,16 @@ private struct ConversationRow: View {
             ? date.formatted(.dateTime.hour().minute())
             : date.formatted(.dateTime.month().day())
     }
+}
+
+// MARK: - Share sheet wrapper
+
+private struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

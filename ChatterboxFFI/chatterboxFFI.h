@@ -332,6 +332,17 @@ uint64_t uniffi_chatterbox_fn_method_chatterboxclient_send_typing(void*_Nonnull 
 uint64_t uniffi_chatterbox_fn_method_chatterboxclient_trust_device(void*_Nonnull ptr, RustBuffer jid, uint32_t device_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_FN_FUNC_GET_LOG_CONTENTS
+#define UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_FN_FUNC_GET_LOG_CONTENTS
+RustBuffer uniffi_chatterbox_fn_func_get_log_contents(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_FN_FUNC_SET_LOG_FILE
+#define UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_FN_FUNC_SET_LOG_FILE
+void uniffi_chatterbox_fn_func_set_log_file(RustBuffer path, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_FFI_CHATTERBOX_RUSTBUFFER_ALLOC
 #define UNIFFI_FFIDEF_FFI_CHATTERBOX_RUSTBUFFER_ALLOC
 RustBuffer ffi_chatterbox_rustbuffer_alloc(uint64_t size, RustCallStatus *_Nonnull out_status
@@ -610,6 +621,18 @@ void ffi_chatterbox_rust_future_free_void(uint64_t handle
 #ifndef UNIFFI_FFIDEF_FFI_CHATTERBOX_RUST_FUTURE_COMPLETE_VOID
 #define UNIFFI_FFIDEF_FFI_CHATTERBOX_RUST_FUTURE_COMPLETE_VOID
 void ffi_chatterbox_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_CHECKSUM_FUNC_GET_LOG_CONTENTS
+#define UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_CHECKSUM_FUNC_GET_LOG_CONTENTS
+uint16_t uniffi_chatterbox_checksum_func_get_log_contents(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_CHECKSUM_FUNC_SET_LOG_FILE
+#define UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_CHECKSUM_FUNC_SET_LOG_FILE
+uint16_t uniffi_chatterbox_checksum_func_set_log_file(void
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CHATTERBOX_CHECKSUM_METHOD_CHATTERBOXCLIENT_CONNECT

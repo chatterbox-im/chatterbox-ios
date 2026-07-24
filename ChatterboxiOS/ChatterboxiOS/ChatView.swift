@@ -118,22 +118,19 @@ struct ChatView: View {
                         }
                     }
                     .padding(.vertical, 10)
-                    Color.clear.frame(height: 1).id("chat-bottom")
                 }
             }
-            .onAppear {
-                DispatchQueue.main.async { scrollToBottom(proxy: proxy, animated: false) }
-            }
+            .onAppear { scrollToBottom(proxy: proxy, animated: false) }
             .onChange(of: messages.count) { scrollToBottom(proxy: proxy, animated: true) }
         }
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
-        guard !messages.isEmpty else { return }
+        guard let last = messages.last else { return }
         if animated {
-            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
         } else {
-            proxy.scrollTo("chat-bottom", anchor: .bottom)
+            proxy.scrollTo(last.id, anchor: .bottom)
         }
     }
 
