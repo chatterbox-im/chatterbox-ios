@@ -573,6 +573,14 @@ public protocol ChatterboxClientProtocol: AnyObject, Sendable {
     func nextEvent() async  -> FfiEvent?
     
     /**
+     * Reset the OMEMO session for a specific contact and device ID.
+     *
+     * This is used to recover from cryptographic desynchronization.
+     * It deletes the existing session state for the given device ID.
+     */
+    func resetOmemoSession(jid: String, deviceId: UInt32) async throws 
+    
+    /**
      * Send an OMEMO-encrypted (or plaintext-fallback) message to `to_jid`.
      * Returns the stored `FfiMessage` so the caller can display it immediately.
      */
@@ -873,6 +881,29 @@ open func nextEvent()async  -> FfiEvent?  {
             liftFunc: FfiConverterOptionTypeFfiEvent.lift,
             errorHandler: nil
             
+        )
+}
+    
+    /**
+     * Reset the OMEMO session for a specific contact and device ID.
+     *
+     * This is used to recover from cryptographic desynchronization.
+     * It deletes the existing session state for the given device ID.
+     */
+open func resetOmemoSession(jid: String, deviceId: UInt32)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_chatterbox_fn_method_chatterboxclient_reset_omemo_session(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(jid),FfiConverterUInt32.lower(deviceId)
+                )
+            },
+            pollFunc: ffi_chatterbox_rust_future_poll_void,
+            completeFunc: ffi_chatterbox_rust_future_complete_void,
+            freeFunc: ffi_chatterbox_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeFfiError_lift
         )
 }
     
@@ -1774,6 +1805,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_next_event() != 18508) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_reset_omemo_session() != 39433) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_send_message() != 12952) {
