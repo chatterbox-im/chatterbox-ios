@@ -26,7 +26,7 @@ struct CredentialStore {
 
     // MARK: - Password (Keychain)
 
-    func savePassword(_ password: String) {
+    func savePassword(_ password: String) throws {
         guard let data = password.data(using: .utf8) else { return }
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
@@ -34,10 +34,42 @@ struct CredentialStore {
             kSecAttrAccount: username,
         ]
         // Delete any existing item first, then add the new one.
-        SecItemDelete(query as CFDictionary)
+        let deleteStatus = SecItemDelete(query as CFDictionary)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            throw keychainError(status: deleteStatus, operation: "delete")
+        }
         var item = query
         item[kSecValueData] = data
-        SecItemAdd(item as CFDictionary, nil)
+        var added: AnyObject?
+        let addStatus = SecItemAdd(item as CFDictionary, &added)
+        if addStatus != errSecSuccess {
+            throw keychainError(status: addStatus, operation: "save")
+        }
+    }
+
+    private func keychainError(status: OSStatus, operation: String) -> Error {
+        NSError(
+            domain: "CredentialStore",
+            code: Int(status),
+            userInfo: [
+                NSLocalizedDescriptionKey: "Keychain \(operation) failed (status: \(status))",
+                NSLocalizedFailureReasonErrorKey: keychainStatusString(status)
+            ]
+        )
+    }
+
+    private func keychainStatusString(_ status: OSStatus) -> String {
+        switch status {
+        case errSecSuccess:               return "Success"
+        case -25299:                      return "Unspecified error"
+        case errSecItemNotFound:          return "Item not found"
+        case errSecInteractionNotAllowed: return "User interaction not allowed"
+        case -25243:                      return "Access denied"
+        case errSecAuthFailed:            return "Authentication failed"
+        case -25247:                      return "Keychain not found"
+        case errSecReadOnly:              return "Keychain is read-only"
+        default:                          return "Unknown error (\(status))"
+        }
     }
 
     func loadPassword() -> String? {
@@ -54,12 +86,15 @@ struct CredentialStore {
         return String(data: data, encoding: .utf8)
     }
 
-    func clearAll() {
+    func clearAll() throws {
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
             kSecAttrService: keychainService,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            throw keychainError(status: status, operation: "delete")
+        }
         UserDefaults.standard.removeObject(forKey: serverKey)
         UserDefaults.standard.removeObject(forKey: usernameKey)
     }

@@ -1,9 +1,9 @@
 import SwiftUI
-import os.log
 
 struct ContactInfoView: View {
     let jid: String
     @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var toasts: ToastStore
     @State private var fingerprints: [FfiFingerprint] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -114,18 +114,24 @@ struct ContactInfoView: View {
 
     private func resetAndReload() async {
         let count = self.fingerprints.count
-        print("[ContactInfoView] Resetting OMEMO sessions for \(count) device(s)")
+        var errors: [String] = []
         for fp in self.fingerprints {
-            print("[ContactInfoView] Resetting session for device \(fp.deviceId)")
-            try? await state.client.resetOmemoSession(jid: jid, deviceId: fp.deviceId)
+            do {
+                try await state.client.resetOmemoSession(jid: jid, deviceId: fp.deviceId)
+            } catch {
+                errors.append("Device \(fp.deviceId): \(error.localizedDescription)")
+            }
         }
-        print("[ContactInfoView] Reset complete, reloading fingerprints")
         await loadFingerprints()
-        self.successMessage = "Reset \(count) session(s) and reloaded fingerprints"
+        if errors.isEmpty {
+            self.successMessage = "Reset \(count) session(s) and reloaded fingerprints"
+        } else {
+            self.successMessage = "Reset \(count - errors.count) of \(count) session(s)"
+            toasts.warning("Failed to reset \(errors.count) session(s)")
+        }
     }
 
     private func loadFingerprints() async {
-        print("[ContactInfoView] Loading fingerprints for \(jid)")
         self.isLoading = true
         self.errorMessage = nil
         self.successMessage = nil
@@ -133,10 +139,8 @@ struct ContactInfoView: View {
             self.fingerprints = try await withTimeout(10) {
                 try await state.client.getFingerprints(jid: jid)
             }
-            print("[ContactInfoView] Loaded \(self.fingerprints.count) fingerprint(s)")
             self.successMessage = "Loaded \(self.fingerprints.count) fingerprint(s)"
         } catch {
-            print("[ContactInfoView] Error loading fingerprints: \(error.localizedDescription)")
             self.errorMessage = error.localizedDescription
         }
         self.isLoading = false
@@ -162,6 +166,7 @@ private struct FingerprintRow: View {
     let fingerprint: FfiFingerprint
     let jid: String
     @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var toasts: ToastStore
 
     private var fingerprintLines: (line1: String, line2: String) {
         let groups = fingerprint.fingerprint.components(separatedBy: " ")
@@ -199,11 +204,13 @@ private struct FingerprintRow: View {
         do {
             if fingerprint.isTrusted {
                 try await state.client.distrustDevice(jid: jid, deviceId: fingerprint.deviceId)
+                toasts.success("Device \(fingerprint.deviceId) distrusted")
             } else {
                 try await state.client.trustDevice(jid: jid, deviceId: fingerprint.deviceId)
+                toasts.success("Device \(fingerprint.deviceId) trusted")
             }
         } catch {
-            // Ignore — fingerprint list will refresh on next open
+            toasts.error("Failed to update trust for device \(fingerprint.deviceId)")
         }
     }
 }

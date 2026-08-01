@@ -60,6 +60,10 @@ private func performMAMCatchUp() async -> Int {
     var newCount = 0
     let ownUsername = CredentialStore.shared.username
 
+    // NOTE: Do NOT call setLogFile here. setLogFile truncates the file, which
+    // would wipe all foreground session logs. Background refresh logs are kept
+    // in the in-memory ring buffer only.
+
     // Use the timestamp of the last successful background refresh; default to 24 h ago.
     let lastRefresh = UserDefaults.standard.double(forKey: kLastBGRefreshKey)
     let since: Int64 = lastRefresh > 0

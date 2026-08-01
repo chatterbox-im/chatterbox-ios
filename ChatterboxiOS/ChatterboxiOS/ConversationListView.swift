@@ -3,11 +3,13 @@ import UIKit
 
 struct ConversationListView: View {
     @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var toasts: ToastStore
     @State private var newJid = ""
     @State private var showNewChat = false
     @State private var showSignOut = false
     @State private var path = NavigationPath()
     @State private var logShareURL: URL?
+    @State private var showLogs = false
 
     /// Contacts not yet in any conversation, for the new-chat picker
     private var rosterContacts: [FfiContact] {
@@ -27,6 +29,10 @@ struct ConversationListView: View {
                         ChatView(jid: value)
                     }
                 }
+        }
+        .sheet(isPresented: $showLogs) {
+            NavigationStack { LogView() }
+                .presentationDetents([.large])
         }
     }
 
@@ -58,8 +64,12 @@ struct ConversationListView: View {
                     Button { showSignOut = true } label: {
                         Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                     }
+                    Divider()
+                    Button { showLogs = true } label: {
+                        Label("View Debug Logs", systemImage: "doc.plaintext")
+                    }
                     Button { exportLogs() } label: {
-                        Label("Export Debug Logs", systemImage: "doc.text.below.ecg")
+                        Label("Export Debug Logs", systemImage: "square.and.arrow.up")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -149,18 +159,28 @@ struct ConversationListView: View {
 
     private func exportLogs() {
         guard let docs = FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+            .urls(for: .documentDirectory, in: .userDomainMask).first else {
+            toasts.error("Cannot access Documents directory")
+            return
+        }
         let logURL = docs.appendingPathComponent("chatterbox.log")
         // If no file session yet, fall back to the in-memory buffer.
         if FileManager.default.fileExists(atPath: logURL.path) {
             logShareURL = logURL
         } else {
             let content = getLogContents()
-            guard !content.isEmpty else { return }
+            guard !content.isEmpty else {
+                toasts.warning("No log content available to export")
+                return
+            }
             let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
                 .appendingPathComponent("chatterbox-logs.txt")
-            try? content.write(to: tmp, atomically: true, encoding: .utf8)
-            logShareURL = tmp
+            do {
+                try content.write(to: tmp, atomically: true, encoding: .utf8)
+                logShareURL = tmp
+            } catch {
+                toasts.error("Failed to write log file: \(error.localizedDescription)")
+            }
         }
     }
 }

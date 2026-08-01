@@ -559,7 +559,7 @@ public protocol ChatterboxClientProtocol: AnyObject, Sendable {
     /**
      * Wait for the next event (message, presence update, or disconnect).
      *
-     * Returns `None` only after `disconnect()` is called and the channel drains.
+     * Returns `None` after `disconnect()` closes the current event stream.
      * Drive this in a Swift Task:
      *
      * ```swift
@@ -855,7 +855,7 @@ open func loadHistory(jid: String, limit: UInt32)async throws  -> [FfiMessage]  
     /**
      * Wait for the next event (message, presence update, or disconnect).
      *
-     * Returns `None` only after `disconnect()` is called and the channel drains.
+     * Returns `None` after `disconnect()` closes the current event stream.
      * Drive this in a Swift Task:
      *
      * ```swift
@@ -1804,7 +1804,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_chatterbox_checksum_method_chatterboxclient_load_history() != 6830) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_chatterbox_checksum_method_chatterboxclient_next_event() != 18508) {
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_next_event() != 57911) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_reset_omemo_session() != 39433) {

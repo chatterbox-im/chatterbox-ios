@@ -19,6 +19,7 @@ private enum ChatItem: Identifiable {
 struct ChatView: View {
     let jid: String
     @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var toasts: ToastStore
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
 
@@ -99,21 +100,31 @@ struct ChatView: View {
                             case .message(let msg):
                                 let ownBare  = state.ownJid.components(separatedBy: "/").first ?? state.ownJid
                                 let fromBare = msg.fromJid.components(separatedBy: "/").first  ?? msg.fromJid
-                                MessageBubble(msg: msg, isOwn: fromBare == ownBare || fromBare == "me")
-                                    .id(msg.id)
-                                    .contextMenu {
-                                        Button {
-                                            UIPasteboard.general.string = msg.body
-                                        } label: {
-                                            Label("Copy", systemImage: "doc.on.doc")
+                                    MessageBubble(msg: msg, isOwn: fromBare == ownBare || fromBare == "me")
+                                        .id(msg.id)
+                                        .contextMenu {
+                                            Button {
+                                                UIPasteboard.general.string = msg.body
+                                            } label: {
+                                                Label("Copy", systemImage: "doc.on.doc")
+                                            }
+                                            if msg.status == "failed" {
+                                                Divider()
+                                                Button {
+                                                    Task {
+                                                        await state.retryMessage(id: msg.id, partner: jid, body: msg.body)
+                                                    }
+                                                } label: {
+                                                    Label("Retry", systemImage: "arrow.clockwise")
+                                                }
+                                            }
+                                            Divider()
+                                            Button(role: .destructive) {
+                                                state.deleteMessage(id: msg.id, partner: jid)
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
                                         }
-                                        Divider()
-                                        Button(role: .destructive) {
-                                            state.deleteMessage(id: msg.id, partner: jid)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                    }
                             }
                         }
                     }
@@ -178,6 +189,8 @@ struct ChatView: View {
 private struct MessageBubble: View {
     let msg: FfiMessage
     let isOwn: Bool
+    @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var toasts: ToastStore
 
     var body: some View {
         HStack(alignment: .bottom) {
@@ -205,16 +218,41 @@ private struct MessageBubble: View {
                     )
                     .font(.system(size: 10))
                     if isOwn {
-                        Image(systemName: statusIcon)
-                            .font(.system(size: 10))
+                        statusIconView
                     }
                 }
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
+
+                if msg.status == "failed", let hint = state.messageErrors[msg.id] {
+                    Text(hint)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 4)
+                }
             }
             if !isOwn { Spacer(minLength: 64) }
         }
         .padding(.horizontal, 8)
+    }
+
+    @ViewBuilder
+    private var statusIconView: some View {
+        if msg.status == "failed" {
+            Button {
+                Task {
+                    await state.retryMessage(id: msg.id, partner: msg.toJid, body: msg.body)
+                }
+            } label: {
+                Image(systemName: "exclamationmark.circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+        } else {
+            Image(systemName: statusIcon)
+                .font(.system(size: 10))
+        }
     }
 
     /// Build an AttributedString with any http/https URLs turned into tappable links.
