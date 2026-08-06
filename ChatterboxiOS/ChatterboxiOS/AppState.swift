@@ -4,7 +4,15 @@ import SwiftUI
 @MainActor
 class AppState: ObservableObject {
     let client = ChatterboxClient()
-    @EnvironmentObject private var toasts: ToastStore
+
+    /// Injected explicitly: `@EnvironmentObject` only resolves inside the
+    /// SwiftUI view graph and traps at runtime when read from a plain
+    /// `ObservableObject`.
+    private let toasts: ToastStore
+
+    init(toasts: ToastStore) {
+        self.toasts = toasts
+    }
 
     // MARK: - Connection
     @Published var isConnected = false
@@ -111,15 +119,24 @@ class AppState: ObservableObject {
                 return
             }
             connectionError = userMessage(from: error)
-            // After 3 failed reconnect attempts surface a toast — the bottom bar
-            // "Reconnecting…" indicator is easy to miss when the user is in a chat.
-            if reconnectAttempt >= 2 && !savedServer.isEmpty {
-                toasts.warning("Still unable to connect: \(userMessage(from: error))")
+            // Credentials the server rejected will be rejected again: retrying
+            // forever only burns battery and risks a server-side lockout.
+            if isAuthenticationFailure(error) {
+                reconnectEnabled = false
+                reconnectAttempt = 0
+                isReconnecting = false
+                toasts.error("Sign-in rejected: \(userMessage(from: error))")
+            } else {
+                // After 3 failed reconnect attempts surface a toast — the bottom bar
+                // "Reconnecting…" indicator is easy to miss when the user is in a chat.
+                if reconnectAttempt >= 2 && !savedServer.isEmpty {
+                    toasts.warning("Still unable to connect: \(userMessage(from: error))")
+                }
+                // A reconnect failure should keep using bounded backoff.  A first
+                // sign-in has no saved credentials, so this is a no-op for bad
+                // manual credentials.
+                scheduleReconnect()
             }
-            // A reconnect failure should keep using bounded backoff.  A first
-            // sign-in has no saved credentials, so this is a no-op for bad
-            // manual credentials.
-            scheduleReconnect()
         }
         if generation == connectionGeneration {
             isConnecting = false
@@ -140,12 +157,13 @@ class AppState: ObservableObject {
         guard !trimmed.isEmpty else { return }
 
         let optimisticId = UUID().uuidString
+        let sentAt = Int64(Date().timeIntervalSince1970)
         let optimistic = FfiMessage(
             id: optimisticId,
             fromJid: ownJid,
             toJid: jid,
             body: trimmed,
-            timestamp: Int64(Date().timeIntervalSince1970),
+            timestamp: sentAt,
             isEncrypted: true,
             status: "sending"
         )
@@ -160,12 +178,14 @@ class AppState: ObservableObject {
         } catch {
             let reason = userMessage(from: error)
             if let idx = conversations[jid]?.firstIndex(where: { $0.id == optimisticId }) {
+                // Reuse the original timestamp: re-stamping makes the failed
+                // bubble jump position and can push it past a date separator.
                 conversations[jid]?[idx] = FfiMessage(
                     id: optimisticId,
                     fromJid: ownJid,
                     toJid: jid,
                     body: trimmed,
-                    timestamp: Int64(Date().timeIntervalSince1970),
+                    timestamp: sentAt,
                     isEncrypted: true,
                     status: "failed"
                 )
@@ -240,9 +260,13 @@ class AppState: ObservableObject {
     /// Reconnect immediately using saved credentials when returning to foreground.
     func resumeIfNeeded() {
         reconnectEnabled = true
-        resumePending = true
         guard !isConnected, !isConnecting, !savedServer.isEmpty,
-              let pw = CredentialStore.shared.loadPassword(), !pw.isEmpty else { return }
+              let pw = CredentialStore.shared.loadPassword(), !pw.isEmpty else {
+            // Only remember the resume if a connect call is still draining;
+            // otherwise the flag leaks and fires a spurious reconnect later.
+            resumePending = isConnecting
+            return
+        }
         resumePending = false
         reconnectTask?.cancel()
         reconnectAttempt = 0
@@ -311,6 +335,8 @@ class AppState: ObservableObject {
             do {
                 let msgs = try await client.loadHistory(jid: jid, limit: 100)
                 conversations[jid] = msgs
+                    .map(Self.normalized)
+                    .sorted { $0.timestamp < $1.timestamp }
             } catch {
                 toasts.warning("Failed to load history for \(jid): \(userMessage(from: error))")
             }
@@ -343,9 +369,10 @@ class AppState: ObservableObject {
                         let newMsgs = try await self.client.fetchMam(jid: jid, sinceUnixSecs: since)
                         await MainActor.run {
                             // Filter out IDs already in memory (belt-and-suspenders dedup)
-                            for msg in newMsgs where !knownIds.contains(msg.id) {
-                                self.append(msg, partner: jid)
-                            }
+                            self.mergeCaughtUp(
+                                newMsgs.filter { !knownIds.contains($0.id) },
+                                partner: jid
+                            )
                         }
                     } catch {
                         await MainActor.run {
@@ -355,6 +382,28 @@ class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Merge archived messages into a conversation and count the incoming ones
+    /// as unread.  Without this the background-refresh badge claims N new
+    /// messages while the app shows nothing unread once it opens, because the
+    /// catch-up path bypassed `handle(.message)`.
+    private func mergeCaughtUp(_ msgs: [FfiMessage], partner: String) {
+        var newIncoming = 0
+        for msg in msgs where append(msg, partner: partner) {
+            if !isFromSelf(msg) { newIncoming += 1 }
+        }
+        if newIncoming > 0 {
+            unread[partner, default: 0] += newIncoming
+        }
+    }
+
+    /// True when `msg` was sent by this account (including the Rust layer's
+    /// "me" placeholder and server echoes carrying a full JID + resource).
+    private func isFromSelf(_ msg: FfiMessage) -> Bool {
+        let fromBare = msg.fromJid.components(separatedBy: "/").first ?? msg.fromJid
+        let ownBare = ownJid.components(separatedBy: "/").first ?? ownJid
+        return fromBare == ownBare || fromBare == "me"
     }
 
     // MARK: - Private: event loop
@@ -383,7 +432,9 @@ class AppState: ObservableObject {
             let partner = partnerJid(for: msg)
             guard partner != "me", partner != "unknown", partner.contains("@") else { return }
             let isNew = append(msg, partner: partner)
-            if isNew { unread[partner, default: 0] += 1 }
+            // Server echoes of our own outgoing messages carry a server-assigned
+            // ID that never matches the optimistic UUID, so they look "new".
+            if isNew && !isFromSelf(msg) { unread[partner, default: 0] += 1 }
         case .statusUpdate(let msgId, let status):
             for jid in conversations.keys {
                 if let idx = conversations[jid]!.firstIndex(where: { $0.id == msgId }) {
@@ -463,13 +514,63 @@ class AppState: ObservableObject {
         return isOwn ? toBare : fromBare
     }
 
+    // MARK: - Private: timestamp normalisation
+
+    /// Anything larger than this is not a seconds-since-epoch value:
+    /// 1e11 seconds is the year 5138.
+    private static let maxPlausibleUnixSeconds: Int64 = 100_000_000_000
+
+    /// The Rust layer hands back timestamps in whatever unit its storage
+    /// layer happened to use — SQLite/MAM rows come back in milliseconds while
+    /// locally created messages are in seconds.  Mixing the two renders dates
+    /// in the year 58536 and makes every chronological comparison meaningless,
+    /// so normalise to seconds at the boundary.
+    private static func normalizedTimestamp(_ raw: Int64) -> Int64 {
+        var value = raw
+        while value > maxPlausibleUnixSeconds {
+            value /= 1000
+        }
+        return value
+    }
+
+    private static func normalized(_ msg: FfiMessage) -> FfiMessage {
+        let fixed = normalizedTimestamp(msg.timestamp)
+        guard fixed != msg.timestamp else { return msg }
+        return FfiMessage(
+            id: msg.id, fromJid: msg.fromJid, toJid: msg.toJid,
+            body: msg.body, timestamp: fixed,
+            isEncrypted: msg.isEncrypted, status: msg.status
+        )
+    }
+
     @discardableResult
-    private func append(_ msg: FfiMessage, partner: String) -> Bool {
+    private func append(_ rawMsg: FfiMessage, partner: String) -> Bool {
+        let msg = Self.normalized(rawMsg)
         if conversations[partner, default: []].contains(where: { $0.id == msg.id }) {
             return false
         }
-        conversations[partner, default: []].append(msg)
+        // MAM catch-up interleaves archived messages with live ones, so append
+        // order is not chronological.  Insert by timestamp to keep the chat and
+        // the conversation-list preview correct.
+        var msgs = conversations[partner, default: []]
+        let idx = msgs.lastIndex { $0.timestamp <= msg.timestamp }.map { $0 + 1 } ?? 0
+        msgs.insert(msg, at: idx)
+        conversations[partner] = msgs
         return true
+    }
+
+    /// True when the server rejected the credentials rather than the transport
+    /// failing.  Heuristic: the Rust layer only gives us a message string.
+    private func isAuthenticationFailure(_ error: Swift.Error) -> Bool {
+        guard let ffiError = error as? FfiError,
+              case .Connection(let reason) = ffiError else { return false }
+        let lower = reason.lowercased()
+        return lower.contains("not-authorized")
+            || lower.contains("not authorized")
+            || lower.contains("unauthorized")
+            || lower.contains("authentication fail")
+            || lower.contains("invalid credentials")
+            || lower.contains("sasl")
     }
 
     /// Extract a user-friendly message from an FFI error.

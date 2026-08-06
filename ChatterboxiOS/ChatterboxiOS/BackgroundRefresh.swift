@@ -5,6 +5,7 @@ import Foundation
 // Identifier must match BGTaskSchedulerPermittedIdentifiers in Info.plist
 let kBGRefreshTaskID = "io.github.chatterbox-im.ChatterboxiOS.refresh"
 private let kLastBGRefreshKey = "lastBGRefreshTimestamp"
+private let kPendingBadgeKey = "pendingBadgeCount"
 
 // MARK: - Registration (call once at app startup)
 
@@ -32,21 +33,41 @@ func scheduleBackgroundRefresh() {
 
 // MARK: - Task handler
 
+/// Ensures `setTaskCompleted` runs exactly once: calling it after expiry has
+/// already completed the task is treated by iOS as a programmer error.
+private final class CompletionGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isDone = false
+
+    func completeOnce(_ body: () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isDone else { return }
+        isDone = true
+        body()
+    }
+}
+
 private func handleBackgroundRefresh(task: BGAppRefreshTask) {
     // Re-schedule before doing any work so we don't miss the next slot
     scheduleBackgroundRefresh()
 
+    let completion = CompletionGuard()
+
     let work = Task {
         let newMessages = await performMAMCatchUp()
-        if newMessages > 0 {
-            await deliverLocalNotification(newMessages: newMessages)
+        if newMessages > 0, !Task.isCancelled {
+            await deliverLocalNotification(
+                newMessages: newMessages,
+                badgeCount: addPendingBadgeCount(newMessages)
+            )
         }
-        task.setTaskCompleted(success: true)
+        completion.completeOnce { task.setTaskCompleted(success: true) }
     }
 
     task.expirationHandler = {
         work.cancel()
-        task.setTaskCompleted(success: false)
+        completion.completeOnce { task.setTaskCompleted(success: false) }
     }
 }
 
@@ -59,6 +80,13 @@ private func performMAMCatchUp() async -> Int {
     let client = ChatterboxClient()
     var newCount = 0
     let ownUsername = CredentialStore.shared.username
+    // The login form stores server and username separately, so `username` is
+    // usually a bare local part ("alice") while MAM returns full JIDs
+    // ("alice@example.com/resource").  Comparing the two unmodified made every
+    // message we had sent ourselves count as an incoming one, which is how the
+    // badge ends up claiming new messages that do not exist.
+    let ownBareJid = bareJid(username: ownUsername, server: CredentialStore.shared.server)
+    let ownLocalPart = ownBareJid.components(separatedBy: "@").first ?? ownBareJid
 
     // NOTE: Do NOT call setLogFile here. setLogFile truncates the file, which
     // would wipe all foreground session logs. Background refresh logs are kept
@@ -79,17 +107,23 @@ private func performMAMCatchUp() async -> Int {
 
         if let jids = try? await client.listConversations() {
             for jid in jids where jid.contains("@") {
+                // The expiration handler cancels us; stop promptly so we can
+                // disconnect cleanly before iOS kills the process.
+                if Task.isCancelled { break }
                 let msgs = (try? await client.fetchMam(jid: jid, sinceUnixSecs: since)) ?? []
                 // Count only messages FROM others (not our own echoes)
-                let ownBare = ownUsername.components(separatedBy: "/").first ?? ownUsername
                 newCount += msgs.filter {
                     let from = $0.fromJid.components(separatedBy: "/").first ?? $0.fromJid
-                    return from != ownBare && from != "me"
+                    return from != ownBareJid && from != ownLocalPart && from != "me"
                 }.count
             }
         }
 
-        UserDefaults.standard.set(Date().timeIntervalSinceNow, forKey: kLastBGRefreshKey)
+        // timeIntervalSinceNow is ~0, not an epoch value: storing it made the
+        // `lastRefresh > 0` check below always fail and re-count a full day.
+        if !Task.isCancelled {
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: kLastBGRefreshKey)
+        }
     } catch {
         // Connection failed — will retry on next background slot
     }
@@ -98,9 +132,30 @@ private func performMAMCatchUp() async -> Int {
     return newCount
 }
 
+/// Builds the account's bare JID from the separately stored server/username.
+private func bareJid(username: String, server: String) -> String {
+    let withDomain = username.contains("@") ? username : "\(username)@\(server)"
+    return withDomain.components(separatedBy: "/").first ?? withDomain
+}
+
+// MARK: - Badge bookkeeping
+
+/// The badge must survive several background wakes, and must be cleared by the
+/// foreground once the user has actually seen the messages.
+private func addPendingBadgeCount(_ delta: Int) -> Int {
+    let total = UserDefaults.standard.integer(forKey: kPendingBadgeKey) + delta
+    UserDefaults.standard.set(total, forKey: kPendingBadgeKey)
+    return total
+}
+
+/// Call when the app becomes active — the in-app unread counts take over.
+func resetPendingBadgeCount() {
+    UserDefaults.standard.set(0, forKey: kPendingBadgeKey)
+}
+
 // MARK: - Local notification
 
-private func deliverLocalNotification(newMessages: Int) async {
+private func deliverLocalNotification(newMessages: Int, badgeCount: Int) async {
     let center = UNUserNotificationCenter.current()
     let settings = await center.notificationSettings()
     guard settings.authorizationStatus == .authorized else { return }
@@ -111,7 +166,7 @@ private func deliverLocalNotification(newMessages: Int) async {
         ? "You have 1 new message"
         : "You have \(newMessages) new messages"
     content.sound = .default
-    content.badge = NSNumber(value: newMessages)
+    content.badge = NSNumber(value: badgeCount)
 
     let request = UNNotificationRequest(
         identifier: "bg-refresh-\(Int(Date().timeIntervalSince1970))",

@@ -526,8 +526,9 @@ public protocol ChatterboxClientProtocol: AnyObject, Sendable {
     
     /**
      * Fetch server-side message archive (MAM, XEP-0313) for `jid` and store
-     * any messages newer than `since_unix_secs`.  Returns the new messages
-     * oldest-first so the caller can append them to local history.
+     * any messages newer than `since_unix_secs` (**seconds** since the epoch).
+     * Returns only messages that were not already present locally, oldest-first,
+     * so the caller can append them to local history and count them as unread.
      */
     func fetchMam(jid: String, sinceUnixSecs: Int64) async throws  -> [FfiMessage]
     
@@ -747,8 +748,9 @@ open func distrustDevice(jid: String, deviceId: UInt32)async throws   {
     
     /**
      * Fetch server-side message archive (MAM, XEP-0313) for `jid` and store
-     * any messages newer than `since_unix_secs`.  Returns the new messages
-     * oldest-first so the caller can append them to local history.
+     * any messages newer than `since_unix_secs` (**seconds** since the epoch).
+     * Returns only messages that were not already present locally, oldest-first,
+     * so the caller can append them to local history and count them as unread.
      */
 open func fetchMam(jid: String, sinceUnixSecs: Int64)async throws  -> [FfiMessage]  {
     return
@@ -1121,16 +1123,24 @@ public struct FfiFingerprint {
      */
     public var fingerprint: String
     public var isTrusted: Bool
+    /**
+     * Full trust level: "undecided" | "trusted" | "verified" | "untrusted"
+     */
+    public var trustLevel: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
     public init(deviceId: UInt32, 
         /**
          * 64-char hex string, space-grouped for display: "AABB CCDD …"
-         */fingerprint: String, isTrusted: Bool) {
+         */fingerprint: String, isTrusted: Bool, 
+        /**
+         * Full trust level: "undecided" | "trusted" | "verified" | "untrusted"
+         */trustLevel: String) {
         self.deviceId = deviceId
         self.fingerprint = fingerprint
         self.isTrusted = isTrusted
+        self.trustLevel = trustLevel
     }
 }
 
@@ -1150,6 +1160,9 @@ extension FfiFingerprint: Equatable, Hashable {
         if lhs.isTrusted != rhs.isTrusted {
             return false
         }
+        if lhs.trustLevel != rhs.trustLevel {
+            return false
+        }
         return true
     }
 
@@ -1157,6 +1170,7 @@ extension FfiFingerprint: Equatable, Hashable {
         hasher.combine(deviceId)
         hasher.combine(fingerprint)
         hasher.combine(isTrusted)
+        hasher.combine(trustLevel)
     }
 }
 
@@ -1171,7 +1185,8 @@ public struct FfiConverterTypeFfiFingerprint: FfiConverterRustBuffer {
             try FfiFingerprint(
                 deviceId: FfiConverterUInt32.read(from: &buf), 
                 fingerprint: FfiConverterString.read(from: &buf), 
-                isTrusted: FfiConverterBool.read(from: &buf)
+                isTrusted: FfiConverterBool.read(from: &buf), 
+                trustLevel: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -1179,6 +1194,7 @@ public struct FfiConverterTypeFfiFingerprint: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.deviceId, into: &buf)
         FfiConverterString.write(value.fingerprint, into: &buf)
         FfiConverterBool.write(value.isTrusted, into: &buf)
+        FfiConverterString.write(value.trustLevel, into: &buf)
     }
 }
 
@@ -1207,7 +1223,12 @@ public struct FfiMessage {
     public var toJid: String
     public var body: String
     /**
-     * Unix timestamp (seconds since epoch)
+     * Unix timestamp in **seconds** since the epoch.
+     *
+     * `Message::timestamp` is milliseconds internally (see the SQLite
+     * migration in `storage.rs`); the conversion happens in
+     * `to_ffi_message` so Swift can feed this straight into
+     * `Date(timeIntervalSince1970:)`.
      */
     public var timestamp: Int64
     public var isEncrypted: Bool
@@ -1220,7 +1241,12 @@ public struct FfiMessage {
     // declare one manually.
     public init(id: String, fromJid: String, toJid: String, body: String, 
         /**
-         * Unix timestamp (seconds since epoch)
+         * Unix timestamp in **seconds** since the epoch.
+         *
+         * `Message::timestamp` is milliseconds internally (see the SQLite
+         * migration in `storage.rs`); the conversion happens in
+         * `to_ffi_message` so Swift can feed this straight into
+         * `Date(timeIntervalSince1970:)`.
          */timestamp: Int64, isEncrypted: Bool, 
         /**
          * "sent" | "delivered" | "read" | "failed"
@@ -1789,7 +1815,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_chatterbox_checksum_method_chatterboxclient_distrust_device() != 32923) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_chatterbox_checksum_method_chatterboxclient_fetch_mam() != 13931) {
+    if (uniffi_chatterbox_checksum_method_chatterboxclient_fetch_mam() != 47307) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_chatterbox_checksum_method_chatterboxclient_get_contacts() != 31375) {

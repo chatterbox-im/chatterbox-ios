@@ -4,11 +4,15 @@ import UserNotifications
 
 @main
 struct ChatterboxiOSApp: App {
-    @StateObject private var state = AppState()
-    @StateObject private var toasts = ToastStore()
+    @StateObject private var state: AppState
+    @StateObject private var toasts: ToastStore
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // AppState needs the store by reference, not via the environment.
+        let toastStore = ToastStore()
+        _toasts = StateObject(wrappedValue: toastStore)
+        _state = StateObject(wrappedValue: AppState(toasts: toastStore))
         registerBackgroundTasks()
         configureLogging()
     }
@@ -44,14 +48,22 @@ struct ChatterboxiOSApp: App {
                 let app = UIApplication.shared
                 var bgTask = UIBackgroundTaskIdentifier.invalid
                 bgTask = app.beginBackgroundTask(withName: "xmpp-disconnect") {
+                    // Ending the same identifier twice is a hard error.
+                    guard bgTask != .invalid else { return }
                     app.endBackgroundTask(bgTask)
+                    bgTask = .invalid
                 }
                 Task {
                     await state.suspend()
+                    guard bgTask != .invalid else { return }
                     app.endBackgroundTask(bgTask)
+                    bgTask = .invalid
                 }
             case .active:
                 UNUserNotificationCenter.current().setBadgeCount(0)
+                // Drop the accumulated background count too, otherwise the next
+                // refresh re-adds messages the user has already seen.
+                resetPendingBadgeCount()
                 state.resumeIfNeeded()
             default:
                 break

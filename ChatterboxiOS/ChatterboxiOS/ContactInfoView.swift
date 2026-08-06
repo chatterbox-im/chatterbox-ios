@@ -68,8 +68,11 @@ struct ContactInfoView: View {
                         .font(.footnote)
                 } else {
                     ForEach(fingerprints, id: \.deviceId) { fp in
-                        FingerprintRow(fingerprint: fp, jid: jid)
-                            .environmentObject(state)
+                        // Reload after a trust change: the row renders a value
+                        // copy and would otherwise show a stale shield icon.
+                        FingerprintRow(fingerprint: fp, jid: jid) {
+                            await loadFingerprints()
+                        }
                     }
                 }
             } header: {
@@ -113,6 +116,8 @@ struct ContactInfoView: View {
     }
 
     private func resetAndReload() async {
+        guard !isLoading else { return }
+        self.isLoading = true
         let count = self.fingerprints.count
         var errors: [String] = []
         for fp in self.fingerprints {
@@ -122,6 +127,7 @@ struct ContactInfoView: View {
                 errors.append("Device \(fp.deviceId): \(error.localizedDescription)")
             }
         }
+        // loadFingerprints() owns isLoading from here on.
         await loadFingerprints()
         if errors.isEmpty {
             self.successMessage = "Reset \(count) session(s) and reloaded fingerprints"
@@ -165,6 +171,7 @@ struct ContactInfoView: View {
 private struct FingerprintRow: View {
     let fingerprint: FfiFingerprint
     let jid: String
+    let onTrustChanged: () async -> Void
     @EnvironmentObject private var state: AppState
     @EnvironmentObject private var toasts: ToastStore
 
@@ -209,6 +216,7 @@ private struct FingerprintRow: View {
                 try await state.client.trustDevice(jid: jid, deviceId: fingerprint.deviceId)
                 toasts.success("Device \(fingerprint.deviceId) trusted")
             }
+            await onTrustChanged()
         } catch {
             toasts.error("Failed to update trust for device \(fingerprint.deviceId)")
         }

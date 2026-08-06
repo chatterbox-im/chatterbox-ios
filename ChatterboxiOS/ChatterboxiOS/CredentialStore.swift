@@ -40,6 +40,9 @@ struct CredentialStore {
         }
         var item = query
         item[kSecValueData] = data
+        // The default (kSecAttrAccessibleWhenUnlocked) makes the password
+        // unreadable during background refresh on a locked device.
+        item[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         var added: AnyObject?
         let addStatus = SecItemAdd(item as CFDictionary, &added)
         if addStatus != errSecSuccess {
